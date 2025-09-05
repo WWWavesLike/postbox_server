@@ -172,7 +172,7 @@ static void run_producer(struct list_head *pb, struct list_head *sq) {
 	shm_bus_t *bus = map_bus(fd);
 	init_if_needed(bus, creator);
 
-	while (1) {
+	while (!g_stop) {
 		pthread_mutex_lock(&g_pb_mu);
 		struct list_head *nodeptr = list_pop_front(pb);
 		pthread_mutex_unlock(&g_pb_mu);
@@ -215,7 +215,6 @@ static void run_producer(struct list_head *pb, struct list_head *sq) {
 void *shm_main(void *args) {
 	struct list_head *pb = ((listargs *)args)->pb;
 	struct list_head *sq = ((listargs *)args)->sq;
-
 	run_producer(pb, sq);
 	return NULL;
 }

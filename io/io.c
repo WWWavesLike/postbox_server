@@ -24,7 +24,7 @@ printf("%d : fd=%d, \n", n++, l->cfd);
 */
 pthread_mutex_t g_pb_mu = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t g_sq_mu = PTHREAD_MUTEX_INITIALIZER;
-static int g_kickfd = -1;
+int g_kickfd = -1;
 static conn_t *g_conn_by_fd[CONN_FD_MAX] = {0};
 static letter *g_tx_cur[CONN_FD_MAX] = {0};
 static uint32_t g_tx_off[CONN_FD_MAX] = {0};
