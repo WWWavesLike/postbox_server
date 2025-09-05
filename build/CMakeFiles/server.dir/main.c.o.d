@@ -136,4 +136,15 @@ CMakeFiles/server.dir/main.c.o: \
  /usr/include/x86_64-linux-gnu/bits/getopt_posix.h \
  /usr/include/x86_64-linux-gnu/bits/getopt_core.h \
  /usr/include/x86_64-linux-gnu/bits/unistd_ext.h \
+ /home/waveslike/project/climsg/server/shm/shm.h \
+ /home/waveslike/project/climsg/server/shm/../postbox/postbox.h \
+ /home/waveslike/project/climsg/server/shm/../util/list.h \
+ /usr/include/semaphore.h /usr/include/x86_64-linux-gnu/bits/semaphore.h \
+ /usr/lib/gcc/x86_64-linux-gnu/12/include/stdalign.h \
+ /usr/include/x86_64-linux-gnu/sys/mman.h \
+ /usr/include/x86_64-linux-gnu/bits/mman.h \
+ /usr/include/x86_64-linux-gnu/bits/mman-map-flags-generic.h \
+ /usr/include/x86_64-linux-gnu/bits/mman-linux.h \
+ /usr/include/x86_64-linux-gnu/bits/mman-shared.h \
+ /usr/include/x86_64-linux-gnu/bits/mman_ext.h \
  /home/waveslike/project/climsg/server/util/list.h

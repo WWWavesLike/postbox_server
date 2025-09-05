@@ -1,11 +1,9 @@
 #include "io.h"
-// key 로직을 아직 안만들었으므로 가라로 설정함.
-#define FOO 0u
 
 /*
- sending_queue에 노드 집어넣고 동시에 uring 루프 깨우기.
+ sq에 노드 집어넣고 동시에 uring 루프 깨우기.
  안하면 계속 대기상태로 머뭄.
-	list_push_back(&item->ptr, sending_queue);
+	list_push_back(&item->ptr, sq);
 	uint64_t one = 1;
 	write(g_kickfd, &one, sizeof(one));  // uring 루프 깨우기
 */
@@ -25,18 +23,14 @@ printf("%d : fd=%d, \n", n++, l->cfd);
 }
 */
 pthread_mutex_t g_pb_mu = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t g_sq_mu = PTHREAD_MUTEX_INITIALIZER;
 static int g_kickfd = -1;
 static conn_t *g_conn_by_fd[CONN_FD_MAX] = {0};
 static letter *g_tx_cur[CONN_FD_MAX] = {0};
 static uint32_t g_tx_off[CONN_FD_MAX] = {0};
 static bool g_tx_wait_wr[CONN_FD_MAX] = {0};
-static volatile sig_atomic_t g_stop = 0;
+extern volatile sig_atomic_t g_stop;
 static struct list_head g_inflight;
-
-static void on_sigint(int s) {
-	(void)s;
-	g_stop = 1;
-}
 
 static int set_nonblock(int fd) {
 	int f = fcntl(fd, F_GETFL, 0);
@@ -231,15 +225,22 @@ static void print_hex_dump(const uint8_t *p, size_t n) {
 }
 
 // 프레임 처리: printf로 길이/내용 출력
-static void on_frame(conn_t *c, const uint8_t *payload, uint32_t len, struct list_head *pb) {
+static int on_frame(conn_t *c, const uint8_t *payload, uint32_t len, struct list_head *pb) {
 	printf("[fd=%d] frame %u bytes\n", c->fd, len);
 	//	print_hex_dump(payload, len);
 	fflush(stdout);
-
+	if (len < 4) {
+		return -1;
+	}
 	letter *n = create_letter(c->fd, len, payload);
+	if (!n) {
+		fprintf(stderr, "[fd=%d] drop frame : ENOMEM (len=%u)\n", c->fd, len);
+		return 1;
+	}
 	pthread_mutex_lock(&g_pb_mu);
 	list_push_back(&n->ptr, pb);
 	pthread_mutex_unlock(&g_pb_mu);
+	return 0;
 }
 
 // rbuf에서 가능한 만큼 프레임 파싱하여 on_frame 호출
@@ -252,19 +253,28 @@ static int drain_frames(conn_t *c, struct list_head *pb) {
 		uint32_t len = ntohl(be_len);
 		if (len > MAX_FRAME_SIZE)
 			return -1; // 보호
-
+		if (len < 4) {
+			fprintf(stderr, "[fd=%d] protocol error: len=%u (<4)\n", c->fd, len);
+			return -1;
+		}
 		if (c->rsize < 4u + len)
 			break; // payload 부족
 
 		// 프레임 완성 → payload 포인터
 		const uint8_t *payload = c->rbuf + 4u;
-		on_frame(c, payload, len, pb);
+		int retval = on_frame(c, payload, len, pb);
 
 		// 소비한 만큼 앞으로 당김
 		size_t remain = c->rsize - (4u + len);
 		if (remain)
 			memmove(c->rbuf, c->rbuf + 4u + len, remain);
 		c->rsize = remain;
+
+		if (retval < 0) {
+			// -1이므로 버퍼 사이즈가 비정상적임.
+			// 성공 0, 메모리부족 실패 -1
+			return -1;
+		}
 	}
 	return 0;
 }
@@ -342,16 +352,18 @@ static void tx_resume_fd(struct io_uring *ring, int fd) {
 
 // 전역 큐에서 여러 항목을 당겨 보내기 (이벤트 처리 후에 호출)
 static void tx_drain_queue_once(struct io_uring *ring,
-								struct list_head *sending_queue) {
+								struct list_head *sq) {
 	int iters = 0;
 	while (iters++ < TX_BURST_ITERS) {
-		// 먼저, 진행 중인데 POLLWR 대기 아님인 fd가 있으면 그 fd부터 재개하고 종료
-		// (간단화를 위해 스캔은 생략, EV_POLLWR에서 해당 fd를 처리합니다)
 
-		if (list_empty(sending_queue))
+		pthread_mutex_lock(&g_sq_mu);
+		if (list_empty(sq)) {
+			pthread_mutex_unlock(&g_sq_mu);
 			return;
+		}
 
-		letter *node = list_pop_front_entry(sending_queue, letter, ptr);
+		letter *node = list_pop_front_entry(sq, letter, ptr);
+		pthread_mutex_unlock(&g_sq_mu);
 
 		int fd = node->cfd;
 		if (fd < 0 || fd >= CONN_FD_MAX || !g_conn_by_fd[fd]) {
@@ -361,7 +373,9 @@ static void tx_drain_queue_once(struct io_uring *ring,
 
 		// 이 fd에 진행 중 레터가 남아있다면(=EAGAIN 상태) 큐 앞에 되돌리고 종료
 		if (g_tx_cur[fd]) {
-			list_push_front(&node->ptr, sending_queue);
+			pthread_mutex_lock(&g_sq_mu);
+			list_push_front(&node->ptr, sq);
+			pthread_mutex_unlock(&g_sq_mu);
 			return;
 		}
 
@@ -382,7 +396,10 @@ static inline void free_evt(ev_t *e) {
 	free(e);
 }
 
-int io_main(struct list_head *postbox, struct list_head *sending_queue) {
+void *io_main(void *args) {
+	struct list_head *pb = ((listargs *)args)->pb;
+	struct list_head *sq = ((listargs *)args)->sq;
+
 	g_kickfd = eventfd(0, EFD_CLOEXEC);
 	if (g_kickfd < 0) {
 		perror("eventfd"); /* 필요 시 종료 */
@@ -390,13 +407,10 @@ int io_main(struct list_head *postbox, struct list_head *sending_queue) {
 	init_list_head(&g_inflight);
 	uint16_t port = 12345;
 
-	signal(SIGINT, on_sigint);
-	signal(SIGTERM, on_sigint);
-
 	int lfd = create_listen_socket(port);
 	if (lfd < 0) {
 		fprintf(stderr, "리스닝 소켓 생성 실패\n");
-		return 1;
+		return NULL;
 	}
 	printf("io_uring RX server (length-framed) listening on 0.0.0.0:%u\n", port);
 
@@ -405,7 +419,7 @@ int io_main(struct list_head *postbox, struct list_head *sending_queue) {
 	if (r < 0) {
 		fprintf(stderr, "io_uring_queue_init 실패: %s\n", strerror(-r));
 		close(lfd);
-		return 1;
+		return NULL;
 	}
 
 	for (int i = 0; i < MAX_OUTSTANDING_ACCEPT; i++) {
@@ -413,7 +427,7 @@ int io_main(struct list_head *postbox, struct list_head *sending_queue) {
 			fprintf(stderr, "초기 ACCEPT 등록 실패\n");
 			io_uring_queue_exit(&ring);
 			close(lfd);
-			return 1;
+			return NULL;
 		}
 	}
 	if (post_kick_read(&ring) < 0) {
@@ -422,7 +436,7 @@ int io_main(struct list_head *postbox, struct list_head *sending_queue) {
 		close(lfd);
 		if (g_kickfd >= 0)
 			close(g_kickfd);
-		return 1;
+		return NULL;
 	}
 	while (!g_stop) {
 		struct io_uring_cqe *cqe = NULL;
@@ -488,7 +502,7 @@ int io_main(struct list_head *postbox, struct list_head *sending_queue) {
 			memcpy(c->rbuf + c->rsize, c->scratch, (size_t)res);
 			c->rsize += (size_t)res;
 
-			if (drain_frames(c, postbox) < 0) {
+			if (drain_frames(c, pb) < 0) {
 				free_evt(e);
 				free_conn(c);
 				break;
@@ -506,8 +520,20 @@ int io_main(struct list_head *postbox, struct list_head *sending_queue) {
 		case EV_POLLWR: { // 쓰기 가능 알림
 			int fd = e->fd;
 			if (fd >= 0 && fd < CONN_FD_MAX && g_conn_by_fd[fd]) {
-				g_tx_wait_wr[fd] = false;
-				tx_resume_fd(&ring, fd);
+				if (res < 0 || (res & (POLLERR | POLLHUP))) {
+					// 에러/종료: 진행 중 레터 정리 후 연결 종료
+					if (g_tx_cur[fd]) {
+						free(g_tx_cur[fd]);
+						g_tx_cur[fd] = NULL;
+					}
+					g_tx_off[fd] = 0;
+					g_tx_wait_wr[fd] = false;
+					free_conn(g_conn_by_fd[fd]);
+
+				} else if (res & POLLOUT) {
+					g_tx_wait_wr[fd] = false;
+					tx_resume_fd(&ring, fd);
+				}
 			}
 			free_evt(e);
 			break;
@@ -516,7 +542,7 @@ int io_main(struct list_head *postbox, struct list_head *sending_queue) {
 			// 다음 킥 다시 대기
 			post_kick_read(&ring);
 			// 전송 큐 드레인
-			tx_drain_queue_once(&ring, sending_queue);
+			tx_drain_queue_once(&ring, sq);
 			free_evt(e);
 			break;
 		}
@@ -526,7 +552,7 @@ int io_main(struct list_head *postbox, struct list_head *sending_queue) {
 		}
 
 		// 이벤트 처리 후 전역 송신 큐를 한 번 드레인
-		tx_drain_queue_once(&ring, sending_queue);
+		tx_drain_queue_once(&ring, sq);
 	}
 	// 1) 리스닝 소켓 닫아서 pending ACCEPT를 깨움(에러로 CQE 발생)
 	close(lfd);
@@ -565,5 +591,5 @@ int io_main(struct list_head *postbox, struct list_head *sending_queue) {
 	if (g_kickfd >= 0)
 		close(g_kickfd);
 	printf("서버 종료\n");
-	return 0;
+	return NULL;
 }

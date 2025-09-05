@@ -1,37 +1,24 @@
-#define _GNU_SOURCE
-#include "../postbox/postbox.h"
-#include "../util/list.h"
-#include <errno.h>
-#include <fcntl.h>
-#include <pthread.h>
-#include <semaphore.h>
-#include <stdalign.h>
-#include <stdatomic.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <time.h>
-#include <unistd.h>
+#include "shm.h"
 
-#define SHM_NAME "/pubsub_claim_bus_v1"
+#define SHM_NAME "/postbox_system"
 #define CAP 4096 // 2의 거듭제곱 권장
-#define MSG_SZ 65565
+#define MSG_SZ 65536
 #define MAX_CONS 64
 #define PERM_MODE 0644
 
 _Static_assert((CAP & (CAP - 1)) == 0, "CAP must be a power of two");
 
 extern pthread_mutex_t g_pb_mu;
+extern volatile int g_stop;
+
 #define DIE(fmt, ...)                                                                              \
 	do {                                                                                           \
 		fprintf(stderr, "[ERROR] " fmt " (errno=%d:%s)\n", ##__VA_ARGS__, errno, strerror(errno)); \
 		exit(EXIT_FAILURE);                                                                        \
 	} while (0)
 
-static void sem_wait_intr(sem_t *s) {
+static void
+sem_wait_intr(sem_t *s) {
 	for (;;) {
 		if (sem_wait(s) == 0)
 			return;
@@ -156,15 +143,14 @@ static int bus_publish(shm_bus_t *bus, uint32_t id, const void *data, uint32_t l
 		// payload 먼저 쓰기
 		s->id = id;
 		s->len = len;
-		memset(s->data, 0, MSG_SZ);
 		memcpy(s->data, data, len);
 
 		// 재사용 시 상태를 READY로 갱신 → 이후 seq 공개
-		atomic_store_explicit(&s->state, S_READY, memory_order_release);
+		//		atomic_store_explicit(&s->state, S_READY, memory_order_release);
 		atomic_store_explicit(&s->seq, h + 1, memory_order_release);
 
 		// head 증가
-		atomic_store_explicit(&bus->head, h + 1, memory_order_release);
+		atomic_store_explicit(&bus->head, h + 1, memory_order_relaxed);
 
 		// 해당 id 구독자 깨우기(스레드/프로세스 여러 개면 모두 깨어남 → 첫 번째가 claim)
 		for (int i = 0; i < MAX_CONS; ++i) {
@@ -186,26 +172,50 @@ static void run_producer(struct list_head *pb, struct list_head *sq) {
 	shm_bus_t *bus = map_bus(fd);
 	init_if_needed(bus, creator);
 
-	char line[1024];
 	while (1) {
 		pthread_mutex_lock(&g_pb_mu);
 		struct list_head *nodeptr = list_pop_front(pb);
 		pthread_mutex_unlock(&g_pb_mu);
 
-		letter *l = container_of(nodeptr, letter, ptr);
-		uint32_t id = (uint32_t)l->key;
+		while (!g_stop) {
+			letter *l = NULL;
 
-		if (bus_publish(bus, id, l->buf, l->bufsz) != 0) {
-			fprintf(stderr, "publish failed (queue full)\n");
+			pthread_mutex_lock(&g_pb_mu);
+			if (!list_empty(pb)) {
+				l = list_pop_front_entry(pb, letter, ptr);
+			}
+			pthread_mutex_unlock(&g_pb_mu);
+
+			if (!l) {
+				// 비어있으면 잠깐 쉼(또는 eventfd/cond로 대기)
+				struct timespec ts = {.tv_sec = 0, .tv_nsec = 500000}; // 0.5ms
+				nanosleep(&ts, NULL);
+				continue;
+			}
+
+			uint32_t id = l->key;
+			const void *payload = l->buf;
+			uint32_t len = l->bufsz;
+			if (len > MSG_SZ)
+				len = MSG_SZ; // 방어
+
+			if (bus_publish(bus, id, payload, len) != 0) {
+				fprintf(stderr, "publish failed (queue full)\n");
+			}
+
+			free(l); // ★ 퍼블리시 후 반드시 해제
 		}
 	}
 
 	munmap(bus, sizeof(*bus));
 	close(fd);
-	// 종료 훅에서 한 번만: shm_unlink(SHM_NAME);
+	shm_unlink(SHM_NAME);
 }
 
-void shm_main(struct list_head *pb, struct list_head *sq) {
+void *shm_main(void *args) {
+	struct list_head *pb = ((listargs *)args)->pb;
+	struct list_head *sq = ((listargs *)args)->sq;
 
 	run_producer(pb, sq);
+	return NULL;
 }

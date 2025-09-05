@@ -201,6 +201,30 @@ postbox/postbox.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/postbox/postbox.c.s
 .PHONY : postbox/postbox.c.s
 
+shm/shm.o: shm/shm.c.o
+.PHONY : shm/shm.o
+
+# target to build an object file
+shm/shm.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/shm/shm.c.o
+.PHONY : shm/shm.c.o
+
+shm/shm.i: shm/shm.c.i
+.PHONY : shm/shm.i
+
+# target to preprocess a source file
+shm/shm.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/shm/shm.c.i
+.PHONY : shm/shm.c.i
+
+shm/shm.s: shm/shm.c.s
+.PHONY : shm/shm.s
+
+# target to generate assembly for a file
+shm/shm.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/shm/shm.c.s
+.PHONY : shm/shm.c.s
+
 util/list.o: util/list.c.o
 .PHONY : util/list.o
 
@@ -243,6 +267,9 @@ help:
 	@echo "... postbox/postbox.o"
 	@echo "... postbox/postbox.i"
 	@echo "... postbox/postbox.s"
+	@echo "... shm/shm.o"
+	@echo "... shm/shm.i"
+	@echo "... shm/shm.s"
 	@echo "... util/list.o"
 	@echo "... util/list.i"
 	@echo "... util/list.s"

@@ -5,6 +5,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/server.dir/main.c.o.d"
   "CMakeFiles/server.dir/postbox/postbox.c.o"
   "CMakeFiles/server.dir/postbox/postbox.c.o.d"
+  "CMakeFiles/server.dir/shm/shm.c.o"
+  "CMakeFiles/server.dir/shm/shm.c.o.d"
   "CMakeFiles/server.dir/util/list.c.o"
   "CMakeFiles/server.dir/util/list.c.o.d"
   "server"

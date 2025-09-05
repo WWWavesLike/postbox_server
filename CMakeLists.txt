@@ -11,6 +11,7 @@ add_executable(server
                 io/io.c
                 postbox/postbox.c
                 util/list.c
+                shm/shm.c
 )
 set(CMAKE_C_FLAGS_DEBUG "-g -O0 -fno-omit-frame-pointer -fsanitize=address")
 

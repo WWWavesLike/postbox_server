@@ -73,6 +73,6 @@ typedef struct ev {
 	struct list_head lnk;
 } ev_t;
 
-int io_main(struct list_head *postbox, struct list_head *sending_queue);
+void *io_main(void *args);
 
 #endif

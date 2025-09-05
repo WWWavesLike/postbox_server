@@ -11,6 +11,7 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/home/waveslike/project/climsg/server/io/io.c" "CMakeFiles/server.dir/io/io.c.o" "gcc" "CMakeFiles/server.dir/io/io.c.o.d"
   "/home/waveslike/project/climsg/server/main.c" "CMakeFiles/server.dir/main.c.o" "gcc" "CMakeFiles/server.dir/main.c.o.d"
   "/home/waveslike/project/climsg/server/postbox/postbox.c" "CMakeFiles/server.dir/postbox/postbox.c.o" "gcc" "CMakeFiles/server.dir/postbox/postbox.c.o.d"
+  "/home/waveslike/project/climsg/server/shm/shm.c" "CMakeFiles/server.dir/shm/shm.c.o" "gcc" "CMakeFiles/server.dir/shm/shm.c.o.d"
   "/home/waveslike/project/climsg/server/util/list.c" "CMakeFiles/server.dir/util/list.c.o" "gcc" "CMakeFiles/server.dir/util/list.c.o.d"
   )
 
